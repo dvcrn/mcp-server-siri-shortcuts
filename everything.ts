@@ -18,6 +18,7 @@ import {
   UnsubscribeRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { exec } from 'child_process';
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 const ToolInputSchema = ToolSchema.shape.inputSchema;
@@ -40,6 +41,8 @@ const LongRunningOperationSchema = z.object({
     .describe("Duration of the operation in seconds"),
   steps: z.number().default(5).describe("Number of steps in the operation"),
 });
+
+const ListShortcutsSchema = z.object({}).strict();
 
 const PrintEnvSchema = z.object({});
 
@@ -85,8 +88,8 @@ enum PromptName {
 export const createServer = () => {
   const server = new Server(
     {
-      name: "example-servers/everything",
-      version: "1.0.0",
+      name: "siri-shortcuts-mcp",
+      version: "0.1.0",
     },
     {
       capabilities: {
@@ -306,6 +309,30 @@ export const createServer = () => {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const tools: Tool[] = [
+    {
+      name: "list_shortcuts",
+      description: "List all available Siri shortcuts",
+      inputSchema: { type: "object", properties: {} },
+      async run() {
+        return new Promise((resolve, reject) => {
+          exec('shortcuts list', (error, stdout, stderr) => {
+            if (error) {
+              reject(new Error(`Failed to list shortcuts: ${error.message}`));
+              return;
+            }
+            if (stderr) {
+              reject(new Error(`Error listing shortcuts: ${stderr}`));
+              return;
+            }
+            const shortcuts = stdout
+              .split('\n')
+              .filter(line => line.trim())
+              .map(line => ({ name: line.trim() }));
+            resolve({ shortcuts });
+          });
+        });
+      },
+    },
       {
         name: ToolName.ECHO,
         description: "Echoes back the input",
