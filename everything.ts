@@ -3,12 +3,14 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   ErrorCode,
+  ListResourcesRequestSchema,
+  ListPromptsRequestSchema,
   McpError,
   Tool,
   ToolSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import path from "path";
 import fs from "fs";
@@ -32,7 +34,7 @@ const RunShortcutSchema = z
       .string()
       .optional()
       .describe(
-        "The input to pass to the shortcut. Can be text, or a filepath"
+        "The input to pass to the shortcut. Can be text, or a filepath",
       ),
   })
   .strict();
@@ -59,8 +61,8 @@ const listShortcuts = async (): Promise<ToolResult> => {
         reject(
           new McpError(
             ErrorCode.InternalError,
-            `Failed to list shortcuts: ${error.message}`
-          )
+            `Failed to list shortcuts: ${error.message}`,
+          ),
         );
         return;
       }
@@ -68,8 +70,8 @@ const listShortcuts = async (): Promise<ToolResult> => {
         reject(
           new McpError(
             ErrorCode.InternalError,
-            `Error listing shortcuts: ${stderr}`
-          )
+            `Error listing shortcuts: ${stderr}`,
+          ),
         );
         return;
       }
@@ -96,8 +98,8 @@ const openShortcut = async (params: OpenShortcutInput): Promise<ToolResult> => {
         reject(
           new McpError(
             ErrorCode.InternalError,
-            `Failed to open shortcut: ${error.message}`
-          )
+            `Failed to open shortcut: ${error.message}`,
+          ),
         );
         return;
       }
@@ -105,8 +107,8 @@ const openShortcut = async (params: OpenShortcutInput): Promise<ToolResult> => {
         reject(
           new McpError(
             ErrorCode.InternalError,
-            `Error opening shortcut: ${stderr}`
-          )
+            `Error opening shortcut: ${stderr}`,
+          ),
         );
         return;
       }
@@ -120,33 +122,43 @@ const runShortcut = async (params: RunShortcutInput): Promise<ToolResult> => {
   return new Promise((resolve, reject) => {
     let command = `shortcuts run '${params.name}'`;
 
-    if (params.input) {
-      // If it's a file path and exists
-      const input = params.input;
+    const args = ["run", `'${params.name}'`];
 
-      if (input.includes("/")) {
-        if (!fs.existsSync(input)) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Input file does not exist: ${input}`
-          );
-        }
-        command += ` --input-path '${input}'`;
-      } else {
-        // Create temp file with content
-        const tmpPath = path.join("/tmp", `shortcut-input-${Date.now()}`);
-        fs.writeFileSync(tmpPath, input);
-        command += ` --input-path '${tmpPath}'`;
+    const input = params.input || " ";
+
+    if (input.includes("/")) {
+      if (!fs.existsSync(input)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Input file does not exist: ${input}`,
+        );
       }
+      args.push("--input-path");
+      args.push(`'${input}'`);
+    } else {
+      // Create temp file with content
+      const tmpPath = path.join("/tmp", `shortcut-input-${Date.now()}`);
+      fs.writeFileSync(tmpPath, input);
+      args.push("--input-path");
+      args.push(`'${tmpPath}'`);
     }
 
-    exec(command, (error, stdout, stderr) => {
+    args.push("|");
+    args.push("cat");
+
+    console.error("Running command: shortcuts", args.join(" "));
+    exec(`shortcuts ${args.join(" ")}`, (error, stdout, stderr) => {
+      console.error("Run");
+      console.error("Error:", error);
+      console.error("Stdout:", stdout);
+      console.error("Stderr:", stderr);
+
       if (error) {
         reject(
           new McpError(
             ErrorCode.InternalError,
-            `Failed to run shortcut: ${error.message}`
-          )
+            `Failed to run shortcut: ${error.message}`,
+          ),
         );
         return;
       }
@@ -173,7 +185,11 @@ const sanitizeShortcutName = (name: string): string => {
 // Function to fetch all shortcuts and populate the shortcut map
 const initializeShortcuts = async (): Promise<void> => {
   console.error("Initializing shortcuts...");
-  await listShortcuts();
+  try {
+    await listShortcuts();
+  } catch (err) {
+    console.error("Error initializing shortcuts:", err);
+  }
   console.error(`Initialized ${shortcutMap.size} shortcuts`);
 };
 export const createServer = () => {
@@ -185,8 +201,10 @@ export const createServer = () => {
     {
       capabilities: {
         tools: {},
+        resources: {},
+        prompts: {},
       },
-    }
+    },
   );
 
   // Initialize the base tools
@@ -247,8 +265,18 @@ export const createServer = () => {
     return { tools };
   });
 
+  // Handle resources/list requests (even though we don't have any resources)
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    return { resources: [] };
+  });
+
+  // Handle prompts/list requests (even though we don't have any prompts)
+  server.setRequestHandler(ListPromptsRequestSchema, async () => {
+    return { prompts: [] };
+  });
+
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
+    const { name, arguments: args = {} } = request.params;
 
     // Check if it's a base tool
     const isBaseTool = [
@@ -258,7 +286,8 @@ export const createServer = () => {
     ].includes(name as ToolName);
 
     // Check if it's a dynamic shortcut tool
-    const isDynamicTool = name.startsWith("run_shortcut_");
+    const isDynamicTool =
+      typeof name === "string" && name.startsWith("run_shortcut_");
 
     // If it's neither a base tool nor a dynamic tool, throw an error
     if (!isBaseTool && !isDynamicTool) {
@@ -284,10 +313,16 @@ export const createServer = () => {
           if (isDynamicTool) {
             // Extract the shortcut name from the map based on the sanitized name
             const sanitizedName = name.replace("run_shortcut_", "");
-            const shortcutName =
-              Array.from(shortcutMap.entries()).find(
-                ([_, value]) => value === sanitizedName
-              )?.[0] || "";
+            const shortcutName = Array.from(shortcutMap.entries()).find(
+              ([_, value]) => value === sanitizedName,
+            )?.[0];
+
+            if (!shortcutName) {
+              throw new McpError(
+                ErrorCode.InvalidParams,
+                `No shortcut found for sanitized name: ${sanitizedName}`,
+              );
+            }
 
             // Safely extract input from args
             const input =
@@ -299,7 +334,7 @@ export const createServer = () => {
           } else {
             throw new McpError(
               ErrorCode.MethodNotFound,
-              `Unknown tool: ${name}`
+              `Unknown tool: ${name}`,
             );
           }
       }
@@ -317,7 +352,7 @@ export const createServer = () => {
         ? error
         : new McpError(
             ErrorCode.InternalError,
-            error instanceof Error ? error.message : String(error)
+            error instanceof Error ? error.message : String(error),
           );
     }
   });
