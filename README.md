@@ -1,115 +1,73 @@
-# Everything MCP Server
+# Siri Shortcuts MCP Server
 
-This MCP server attempts to exercise all the features of the MCP protocol. It is not intended to be a useful server, but rather a test server for builders of MCP clients. It implements prompts, tools, resources, sampling, and more to showcase MCP capabilities.
+This MCP server provides access to Siri shortcuts functionality via the Model Context Protocol (MCP). It allows listing, opening, and running shortcuts from the macOS Shortcuts app.
 
-## Components
+![screenshot](./screenshot.png)
 
-### Tools
+## Features
 
-1. `echo`
-   - Simple tool to echo back input messages
+- Exposes _all_ shortcuts, meaning the LLM can call anything that is available in the Shortcuts app.
+- List all available shortcuts
+- Open shortcuts in the Shortcuts app
+- Run shortcuts with optional input parameters
+- Dynamically generated tools for each available shortcut
+
+## Tools
+
+### Base Tools
+
+1. `list_shortcuts`
+
+   - Lists all available Siri shortcuts on the system
+   - No input required
+   - Returns: Array of shortcut names
+
+   ```json
+   {
+     "shortcuts": [{ "name": "My Shortcut 1" }, { "name": "My Shortcut 2" }]
+   }
+   ```
+
+2. `open_shortcut`
+
+   - Opens a shortcut in the Shortcuts app
    - Input:
-     - `message` (string): Message to echo back
-   - Returns: Text content with echoed message
+     - `name` (string): Name of the shortcut to open
 
-2. `add`
-   - Adds two numbers together
-   - Inputs:
-     - `a` (number): First number
-     - `b` (number): Second number
-   - Returns: Text result of the addition
+3. `run_shortcut`
+   - Runs a shortcut with optional input
+   - Input:
+     - `name` (string): Name of the shortcut to run
+     - `input` (string, optional): Text input or filepath to pass to the shortcut
 
-3. `longRunningOperation`
-   - Demonstrates progress notifications for long operations
-   - Inputs:
-     - `duration` (number, default: 10): Duration in seconds
-     - `steps` (number, default: 5): Number of progress steps
-   - Returns: Completion message with duration and steps
-   - Sends progress notifications during execution
+### Dynamic Tools
 
-4. `sampleLLM`
-   - Demonstrates LLM sampling capability using MCP sampling feature
-   - Inputs:
-     - `prompt` (string): The prompt to send to the LLM
-     - `maxTokens` (number, default: 100): Maximum tokens to generate
-   - Returns: Generated LLM response
+The server automatically generates additional tools for each available shortcut in the format:
 
-5. `getTinyImage`
-   - Returns a small test image
-   - No inputs required
-   - Returns: Base64 encoded PNG image data
+- Tool name: `run_shortcut_[sanitized_shortcut_name]`
+- Description: Runs the specific shortcut
+- Input:
+  - `input` (string, optional): Text input or filepath to pass to the shortcut
 
-6. `printEnv`
-   - Prints all environment variables
-   - Useful for debugging MCP server configuration
-   - No inputs required
-   - Returns: JSON string of all environment variables
+## Usage with Claude
 
-7. `annotatedMessage`
-   - Demonstrates how annotations can be used to provide metadata about content
-   - Inputs:
-     - `messageType` (enum: "error" | "success" | "debug"): Type of message to demonstrate different annotation patterns
-     - `includeImage` (boolean, default: false): Whether to include an example image
-   - Returns: Content with varying annotations:
-     - Error messages: High priority (1.0), visible to both user and assistant
-     - Success messages: Medium priority (0.7), user-focused
-     - Debug messages: Low priority (0.3), assistant-focused
-     - Optional image: Medium priority (0.5), user-focused
-   - Example annotations:
-     ```json
-     {
-       "priority": 1.0,
-       "audience": ["user", "assistant"]
-     }
-     ```
-
-### Resources
-
-The server provides 100 test resources in two formats:
-- Even numbered resources:
-  - Plaintext format
-  - URI pattern: `test://static/resource/{even_number}`
-  - Content: Simple text description
-
-- Odd numbered resources:
-  - Binary blob format
-  - URI pattern: `test://static/resource/{odd_number}`
-  - Content: Base64 encoded binary data
-
-Resource features:
-- Supports pagination (10 items per page)
-- Allows subscribing to resource updates
-- Demonstrates resource templates
-- Auto-updates subscribed resources every 5 seconds
-
-### Prompts
-
-1. `simple_prompt`
-   - Basic prompt without arguments
-   - Returns: Single message exchange
-
-2. `complex_prompt`
-   - Advanced prompt demonstrating argument handling
-   - Required arguments:
-     - `temperature` (number): Temperature setting
-   - Optional arguments:
-     - `style` (string): Output style preference
-   - Returns: Multi-turn conversation with images
-
-## Usage with Claude Desktop
-
-Add to your `claude_desktop_config.json`:
+Add to your Claude configuration:
 
 ```json
 {
   "mcpServers": {
-    "everything": {
+    "siri-shortcuts": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-everything"
-      ]
+      "args": ["mcp-server-siri-shortcuts"]
     }
   }
 }
 ```
+
+## Implementation Details
+
+- Uses the macOS `shortcuts` CLI command under the hood
+- Sanitizes shortcut names for tool naming compatibility
+- Supports both direct text input and file-based input
+- Returns shortcut output when available
+- Implements standard MCP error handling

@@ -1,6 +1,6 @@
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
-import { createServer } from "./everything.js";
+import { createServer } from "./shortcuts.js";
 
 const app = express();
 
