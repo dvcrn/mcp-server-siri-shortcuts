@@ -2,6 +2,10 @@
 
 This MCP server provides access to Siri shortcuts functionality via the Model Context Protocol (MCP). It allows listing, opening, and running shortcuts from the macOS Shortcuts app.
 
+<a href="https://glama.ai/mcp/servers/ijrlb9sj4k">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/ijrlb9sj4k/badge" alt="Siri Shortcuts Server MCP server" />
+</a>
+
 ![screenshot](./screenshot.png)
 
 ## Features
