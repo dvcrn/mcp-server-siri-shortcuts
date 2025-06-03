@@ -51,6 +51,30 @@ type RunShortcutInput = z.infer<typeof RunShortcutSchema>;
 // Map to store shortcut names and their sanitized IDs
 const shortcutMap = new Map<string, string>();
 
+// Helper function to generate unique sanitized names to avoid conflicts
+const generateUniqueSanitizedName = (originalName: string, existingSanitizedNames: Set<string>): string => {
+  let baseSanitized = sanitizeShortcutName(originalName);
+  let uniqueSanitized = baseSanitized;
+  let counter = 1;
+  
+  // Check if this sanitized name already exists, if so add a counter
+  while (existingSanitizedNames.has(uniqueSanitized)) {
+    const suffix = `_${counter}`;
+    const maxLength = 64 - "run_shortcut_".length;
+    
+    // Ensure the base name + suffix doesn't exceed the limit
+    if (baseSanitized.length + suffix.length > maxLength) {
+      const truncatedBase = baseSanitized.substring(0, maxLength - suffix.length);
+      uniqueSanitized = truncatedBase + suffix;
+    } else {
+      uniqueSanitized = baseSanitized + suffix;
+    }
+    counter++;
+  }
+  
+  return uniqueSanitized;
+};
+
 type ToolResult = { [key: string]: any };
 
 // Function to execute the list_shortcuts tool
@@ -80,9 +104,12 @@ const listShortcuts = async (): Promise<ToolResult> => {
         .filter((line) => line.trim())
         .map((line) => ({ name: line.trim() }));
 
-      // Update the shortcut map
+      // Update the shortcut map with unique sanitized names
+      const existingSanitizedNames = new Set<string>();
       shortcuts.forEach((shortcut) => {
-        shortcutMap.set(shortcut.name, sanitizeShortcutName(shortcut.name));
+        const uniqueSanitizedName = generateUniqueSanitizedName(shortcut.name, existingSanitizedNames);
+        shortcutMap.set(shortcut.name, uniqueSanitizedName);
+        existingSanitizedNames.add(uniqueSanitizedName);
       });
       resolve({ shortcuts });
     });
@@ -175,11 +202,24 @@ const runShortcut = async (params: RunShortcutInput): Promise<ToolResult> => {
 
 // Function to sanitize shortcut names for use in command names
 const sanitizeShortcutName = (name: string): string => {
-  return name
+  const prefix = "run_shortcut_";
+  const maxToolNameLength = 64;
+  const maxSanitizedLength = maxToolNameLength - prefix.length;
+  
+  let sanitized = name
     .toLowerCase()
     .replace(/[^a-z0-9_]/g, "_") // Replace non-alphanumeric chars with underscores
     .replace(/_+/g, "_") // Replace multiple underscores with a single one
     .replace(/^_|_$/g, ""); // Remove leading/trailing underscores
+  
+  // Truncate if necessary to ensure total tool name length doesn't exceed 64 characters
+  if (sanitized.length > maxSanitizedLength) {
+    sanitized = sanitized.substring(0, maxSanitizedLength);
+    // Remove trailing underscore if truncation resulted in one
+    sanitized = sanitized.replace(/_$/, "");
+  }
+  
+  return sanitized;
 };
 
 // Function to fetch all shortcuts and populate the shortcut map
