@@ -52,7 +52,7 @@ type RunShortcutInput = z.infer<typeof RunShortcutSchema>;
 const shortcutMap = new Map<string, string>();
 
 // Helper function to generate unique sanitized names to avoid conflicts
-const generateUniqueSanitizedName = (originalName: string, existingSanitizedNames: Set<string>): string => {
+export const generateUniqueSanitizedName = (originalName: string, existingSanitizedNames: Set<string>): string => {
   let baseSanitized = sanitizeShortcutName(originalName);
   let uniqueSanitized = baseSanitized;
   let counter = 1;
@@ -201,7 +201,7 @@ const runShortcut = async (params: RunShortcutInput): Promise<ToolResult> => {
 };
 
 // Function to sanitize shortcut names for use in command names
-const sanitizeShortcutName = (name: string): string => {
+export const sanitizeShortcutName = (name: string): string => {
   const prefix = "run_shortcut_";
   const maxToolNameLength = 64;
   const maxSanitizedLength = maxToolNameLength - prefix.length;
