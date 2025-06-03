@@ -22,7 +22,8 @@
     "prepare": "npm run build",
     "watch": "tsc --watch",
     "start": "node dist/index.js",
-    "start:sse": "node dist/sse.js"
+    "start:sse": "node dist/sse.js",
+    "test": "vitest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.0.1",
@@ -33,6 +34,7 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "shx": "^0.3.4",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "vitest": "^3.2.0"
   }
 }
