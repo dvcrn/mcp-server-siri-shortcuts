@@ -1,6 +1,6 @@
 {
   "name": "mcp-server-siri-shortcuts",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server that provides access to Siri shortcuts",
   "license": "MIT",
   "author": "David Mohl <git@d.sh>",
