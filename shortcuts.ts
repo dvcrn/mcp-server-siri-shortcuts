@@ -15,6 +15,10 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import path from "path";
 import fs from "fs";
 
+// Configuration from environment variables
+const GENERATE_SHORTCUT_TOOLS = process.env.GENERATE_SHORTCUT_TOOLS !== "false";
+const INJECT_SHORTCUT_LIST = process.env.INJECT_SHORTCUT_LIST === "true";
+
 const ToolInputSchema = ToolSchema.shape.inputSchema;
 type ToolInput = z.infer<typeof ToolInputSchema>;
 
@@ -249,6 +253,16 @@ export const createServer = () => {
 
   // Initialize the base tools
   const getBaseTools = (): Tool[] => {
+    let runShortcutDescription = "Run a shortcut with optional input and output parameters";
+    
+    // Conditionally inject shortcut list into the description
+    if (INJECT_SHORTCUT_LIST && shortcutMap.size > 0) {
+      const shortcutList = Array.from(shortcutMap.keys())
+        .map(name => `- "${name}"`)
+        .join('\n');
+      runShortcutDescription += `\n\nAvailable shortcuts:\n${shortcutList}`;
+    }
+
     return [
       {
         name: ToolName.LIST_SHORTCUTS,
@@ -264,7 +278,7 @@ export const createServer = () => {
       },
       {
         name: ToolName.RUN_SHORTCUT,
-        description: "Run a shortcut with optional input and output parameters",
+        description: runShortcutDescription,
         inputSchema: zodToJsonSchema(RunShortcutSchema) as ToolInput,
         run: (params: any) => runShortcut(params as RunShortcutInput),
       },
@@ -300,7 +314,12 @@ export const createServer = () => {
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const tools: Tool[] = [...getBaseTools(), ...getDynamicShortcutTools()];
+    const tools: Tool[] = [...getBaseTools()];
+    
+    // Conditionally add dynamic shortcut tools
+    if (GENERATE_SHORTCUT_TOOLS) {
+      tools.push(...getDynamicShortcutTools());
+    }
 
     return { tools };
   });
@@ -327,6 +346,7 @@ export const createServer = () => {
 
     // Check if it's a dynamic shortcut tool
     const isDynamicTool =
+      GENERATE_SHORTCUT_TOOLS &&
       typeof name === "string" && name.startsWith("run_shortcut_");
 
     // If it's neither a base tool nor a dynamic tool, throw an error

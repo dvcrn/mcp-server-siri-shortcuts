@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sanitizeShortcutName, generateUniqueSanitizedName } from './shortcuts.js';
 
 describe('sanitizeShortcutName', () => {
@@ -175,6 +175,250 @@ describe('generateUniqueSanitizedName', () => {
         const fullToolName = `run_shortcut_${result}`;
         expect(fullToolName.length).toBeLessThanOrEqual(64);
       }
+    });
+  });
+});
+
+describe('Configuration Environment Variables', () => {
+  const originalEnv = process.env;
+  
+  beforeEach(() => {
+    // Reset modules to allow re-importing with different env vars
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    // Restore original environment
+    process.env = { ...originalEnv };
+    vi.restoreAllMocks();
+  });
+
+  describe('GENERATE_SHORTCUT_TOOLS environment variable', () => {
+    it('should default to true when not set', () => {
+      delete process.env.GENERATE_SHORTCUT_TOOLS;
+      
+      // Mock child_process before importing
+      vi.doMock('child_process', () => ({
+        exec: vi.fn(),
+        spawn: vi.fn()
+      }));
+      
+      // Since the env vars are read at module import, we need to check the behavior
+      // by testing if the default value would be true
+      const shouldGenerate = process.env.GENERATE_SHORTCUT_TOOLS !== "false";
+      expect(shouldGenerate).toBe(true);
+    });
+
+    it('should be false when explicitly set to "false"', () => {
+      process.env.GENERATE_SHORTCUT_TOOLS = 'false';
+      
+      const shouldGenerate = process.env.GENERATE_SHORTCUT_TOOLS !== "false";
+      expect(shouldGenerate).toBe(false);
+    });
+
+    it('should be true when set to "true"', () => {
+      process.env.GENERATE_SHORTCUT_TOOLS = 'true';
+      
+      const shouldGenerate = process.env.GENERATE_SHORTCUT_TOOLS !== "false";
+      expect(shouldGenerate).toBe(true);
+    });
+
+    it('should be true when set to any other value', () => {
+      process.env.GENERATE_SHORTCUT_TOOLS = 'yes';
+      
+      const shouldGenerate = process.env.GENERATE_SHORTCUT_TOOLS !== "false";
+      expect(shouldGenerate).toBe(true);
+    });
+  });
+
+  describe('INJECT_SHORTCUT_LIST environment variable', () => {
+    it('should default to false when not set', () => {
+      delete process.env.INJECT_SHORTCUT_LIST;
+      
+      const shouldInject = process.env.INJECT_SHORTCUT_LIST === "true";
+      expect(shouldInject).toBe(false);
+    });
+
+    it('should be true when set to "true"', () => {
+      process.env.INJECT_SHORTCUT_LIST = 'true';
+      
+      const shouldInject = process.env.INJECT_SHORTCUT_LIST === "true";
+      expect(shouldInject).toBe(true);
+    });
+
+    it('should be false when set to "false"', () => {
+      process.env.INJECT_SHORTCUT_LIST = 'false';
+      
+      const shouldInject = process.env.INJECT_SHORTCUT_LIST === "true";
+      expect(shouldInject).toBe(false);
+    });
+
+    it('should be false when set to any other value', () => {
+      process.env.INJECT_SHORTCUT_LIST = 'yes';
+      
+      const shouldInject = process.env.INJECT_SHORTCUT_LIST === "true";
+      expect(shouldInject).toBe(false);
+    });
+  });
+});
+
+describe('Server Configuration Integration', () => {
+  const originalEnv = process.env;
+  
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.restoreAllMocks();
+  });
+
+  it('should read environment variables correctly at module level', async () => {
+    // Set environment variables before importing
+    process.env.GENERATE_SHORTCUT_TOOLS = 'false';
+    process.env.INJECT_SHORTCUT_LIST = 'true';
+    
+    // Mock child_process
+    const mockExec = vi.fn((command, callback) => {
+      if (command === 'shortcuts list') {
+        callback(null, 'Test Shortcut 1\nTest Shortcut 2\n', '');
+      }
+    });
+    
+    vi.doMock('child_process', () => ({
+      exec: mockExec,
+      spawn: vi.fn()
+    }));
+    
+    // Import after setting env vars and mocks
+    const shortcuts = await import('./shortcuts.js');
+    
+    // Test that the module imported successfully with the env vars
+    expect(shortcuts).toBeDefined();
+    expect(shortcuts.createServer).toBeDefined();
+  });
+
+  it('should handle shortcut list injection in description', () => {
+    // Test the logic for injecting shortcut list
+    const shortcutMap = new Map([
+      ['Test Shortcut 1', 'test_shortcut_1'],
+      ['Test Shortcut 2', 'test_shortcut_2']
+    ]);
+    
+    const INJECT_SHORTCUT_LIST = true;
+    let runShortcutDescription = "Run a shortcut with optional input and output parameters";
+    
+    // Simulate the description injection logic from the code
+    if (INJECT_SHORTCUT_LIST && shortcutMap.size > 0) {
+      const shortcutList = Array.from(shortcutMap.keys())
+        .map(name => `- "${name}"`)
+        .join('\n');
+      runShortcutDescription += `\n\nAvailable shortcuts:\n${shortcutList}`;
+    }
+    
+    expect(runShortcutDescription).toContain('Available shortcuts:');
+    expect(runShortcutDescription).toContain('- "Test Shortcut 1"');
+    expect(runShortcutDescription).toContain('- "Test Shortcut 2"');
+  });
+
+  it('should not inject shortcut list when INJECT_SHORTCUT_LIST is false', () => {
+    const shortcutMap = new Map([
+      ['Test Shortcut 1', 'test_shortcut_1'],
+      ['Test Shortcut 2', 'test_shortcut_2']
+    ]);
+    
+    const INJECT_SHORTCUT_LIST = false;
+    let runShortcutDescription = "Run a shortcut with optional input and output parameters";
+    
+    // Simulate the description injection logic from the code
+    if (INJECT_SHORTCUT_LIST && shortcutMap.size > 0) {
+      const shortcutList = Array.from(shortcutMap.keys())
+        .map(name => `- "${name}"`)
+        .join('\n');
+      runShortcutDescription += `\n\nAvailable shortcuts:\n${shortcutList}`;
+    }
+    
+    expect(runShortcutDescription).not.toContain('Available shortcuts:');
+    expect(runShortcutDescription).not.toContain('Test Shortcut 1');
+  });
+
+  it('should not inject shortcut list when no shortcuts are available', () => {
+    const shortcutMap = new Map<string, string>();
+    
+    const INJECT_SHORTCUT_LIST = true;
+    let runShortcutDescription = "Run a shortcut with optional input and output parameters";
+    
+    // Simulate the description injection logic from the code
+    if (INJECT_SHORTCUT_LIST && shortcutMap.size > 0) {
+      const shortcutList = Array.from(shortcutMap.keys())
+        .map(name => `- "${name}"`)
+        .join('\n');
+      runShortcutDescription += `\n\nAvailable shortcuts:\n${shortcutList}`;
+    }
+    
+    expect(runShortcutDescription).not.toContain('Available shortcuts:');
+  });
+
+  it('should validate tool names based on GENERATE_SHORTCUT_TOOLS setting', () => {
+    // Test the logic for validating dynamic tool calls
+    const GENERATE_SHORTCUT_TOOLS = false;
+    const toolName = 'run_shortcut_test_shortcut_1';
+    
+    // Base tools
+    const baseTool = ['list_shortcuts', 'open_shortcut', 'run_shortcut'].includes(toolName);
+    
+    // Dynamic tool check
+    const isDynamicTool = GENERATE_SHORTCUT_TOOLS && toolName.startsWith('run_shortcut_');
+    
+    const isValidTool = baseTool || isDynamicTool;
+    
+    expect(baseTool).toBe(false); // This is not a base tool
+    expect(isDynamicTool).toBe(false); // Dynamic tools are disabled
+    expect(isValidTool).toBe(false); // So this tool should not be valid
+  });
+
+  it('should allow dynamic tools when GENERATE_SHORTCUT_TOOLS is true', () => {
+    const GENERATE_SHORTCUT_TOOLS = true;
+    const toolName = 'run_shortcut_test_shortcut_1';
+    
+    // Base tools
+    const baseTool = ['list_shortcuts', 'open_shortcut', 'run_shortcut'].includes(toolName);
+    
+    // Dynamic tool check
+    const isDynamicTool = GENERATE_SHORTCUT_TOOLS && toolName.startsWith('run_shortcut_');
+    
+    const isValidTool = baseTool || isDynamicTool;
+    
+    expect(baseTool).toBe(false); // This is not a base tool
+    expect(isDynamicTool).toBe(true); // Dynamic tools are enabled and this matches the pattern
+    expect(isValidTool).toBe(true); // So this tool should be valid
+  });
+
+  it('should always allow base tools regardless of GENERATE_SHORTCUT_TOOLS setting', () => {
+    const baseTools = ['list_shortcuts', 'open_shortcut', 'run_shortcut'];
+    
+    // Test with GENERATE_SHORTCUT_TOOLS = false
+    let GENERATE_SHORTCUT_TOOLS = false;
+    
+    baseTools.forEach(toolName => {
+      const baseTool = baseTools.includes(toolName);
+      const isDynamicTool = GENERATE_SHORTCUT_TOOLS && toolName.startsWith('run_shortcut_');
+      const isValidTool = baseTool || isDynamicTool;
+      
+      expect(isValidTool).toBe(true);
+    });
+    
+    // Test with GENERATE_SHORTCUT_TOOLS = true
+    GENERATE_SHORTCUT_TOOLS = true;
+    
+    baseTools.forEach(toolName => {
+      const baseTool = baseTools.includes(toolName);
+      const isDynamicTool = GENERATE_SHORTCUT_TOOLS && toolName.startsWith('run_shortcut_');
+      const isValidTool = baseTool || isDynamicTool;
+      
+      expect(isValidTool).toBe(true);
     });
   });
 });

@@ -49,6 +49,13 @@ The server automatically generates additional tools for each available shortcut 
 - Input:
   - `input` (string, optional): Text input or filepath to pass to the shortcut
 
+## Configuration
+
+The server supports the following environment variables:
+
+- `GENERATE_SHORTCUT_TOOLS` (default: `true`): When set to `false`, disables the generation of dynamic shortcut tools. Only the base tools (`list_shortcuts`, `open_shortcut`, `run_shortcut`) will be available.
+- `INJECT_SHORTCUT_LIST` (default: `false`): When set to `true`, injects the list of available shortcuts into the `run_shortcut` tool description to help the LLM understand which shortcuts are available.
+
 ## Usage with Claude
 
 Add to your Claude configuration:
@@ -58,7 +65,11 @@ Add to your Claude configuration:
   "mcpServers": {
     "siri-shortcuts": {
       "command": "npx",
-      "args": ["mcp-server-siri-shortcuts"]
+      "args": ["mcp-server-siri-shortcuts"],
+      "env": {
+        "GENERATE_SHORTCUT_TOOLS": "true",
+        "INJECT_SHORTCUT_LIST": "false"
+      }
     }
   }
 }
