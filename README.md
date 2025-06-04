@@ -37,7 +37,7 @@ This MCP server provides access to Siri shortcuts functionality via the Model Co
 3. `run_shortcut`
    - Runs a shortcut with optional input
    - Input:
-     - `name` (string): Name of the shortcut to run
+     - `name` (string): Name or identifier (UUID) of the shortcut to run
      - `input` (string, optional): Text input or filepath to pass to the shortcut
 
 ### Dynamic Tools

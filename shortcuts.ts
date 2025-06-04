@@ -33,7 +33,7 @@ const OpenShortcutSchema = z
 
 const RunShortcutSchema = z
   .object({
-    name: z.string().describe("The name or identifier of the shortcut to run"),
+    name: z.string().describe("The name or identifier (UUID) of the shortcut to run"),
     input: z
       .string()
       .optional()
@@ -54,6 +54,8 @@ type RunShortcutInput = z.infer<typeof RunShortcutSchema>;
 
 // Map to store shortcut names and their sanitized IDs
 const shortcutMap = new Map<string, string>();
+// Map to store shortcut names and their identifiers (UUIDs)
+const shortcutIdentifierMap = new Map<string, string>();
 
 // Helper function to generate unique sanitized names to avoid conflicts
 export const generateUniqueSanitizedName = (originalName: string, existingSanitizedNames: Set<string>): string => {
@@ -84,7 +86,7 @@ type ToolResult = { [key: string]: any };
 // Function to execute the list_shortcuts tool
 const listShortcuts = async (): Promise<ToolResult> => {
   return new Promise((resolve, reject) => {
-    exec("shortcuts list", (error, stdout, stderr) => {
+    exec("shortcuts list --show-identifiers", (error, stdout, stderr) => {
       if (error) {
         reject(
           new McpError(
@@ -103,10 +105,23 @@ const listShortcuts = async (): Promise<ToolResult> => {
         );
         return;
       }
+      
+      // Parse output with identifiers format: "Name (UUID)"
       const shortcuts = stdout
         .split("\n")
         .filter((line) => line.trim())
-        .map((line) => ({ name: line.trim() }));
+        .map((line) => {
+          const trimmed = line.trim();
+          // Extract name and identifier if present
+          const match = trimmed.match(/^(.+?)\s*\(([A-F0-9-]+)\)$/);
+          if (match) {
+            return { 
+              name: match[1].trim(),
+              identifier: match[2]
+            };
+          }
+          return { name: trimmed };
+        });
 
       // Update the shortcut map with unique sanitized names
       const existingSanitizedNames = new Set<string>();
@@ -114,6 +129,11 @@ const listShortcuts = async (): Promise<ToolResult> => {
         const uniqueSanitizedName = generateUniqueSanitizedName(shortcut.name, existingSanitizedNames);
         shortcutMap.set(shortcut.name, uniqueSanitizedName);
         existingSanitizedNames.add(uniqueSanitizedName);
+        
+        // Store identifier if present
+        if ('identifier' in shortcut && shortcut.identifier) {
+          shortcutIdentifierMap.set(shortcut.name, shortcut.identifier);
+        }
       });
       resolve({ shortcuts });
     });
@@ -253,12 +273,18 @@ export const createServer = () => {
 
   // Initialize the base tools
   const getBaseTools = (): Tool[] => {
-    let runShortcutDescription = "Run a shortcut with optional input and output parameters";
+    let runShortcutDescription = "Run a shortcut by name or identifier (UUID) with optional input and output parameters";
     
     // Conditionally inject shortcut list into the description
     if (INJECT_SHORTCUT_LIST && shortcutMap.size > 0) {
       const shortcutList = Array.from(shortcutMap.keys())
-        .map(name => `- "${name}"`)
+        .map(name => {
+          const identifier = shortcutIdentifierMap.get(name);
+          if (identifier) {
+            return `- "${name}" (${identifier})`;
+          }
+          return `- "${name}"`;
+        })
         .join('\n');
       runShortcutDescription += `\n\nAvailable shortcuts:\n${shortcutList}`;
     }

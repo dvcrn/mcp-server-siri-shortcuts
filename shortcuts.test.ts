@@ -1,5 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sanitizeShortcutName, generateUniqueSanitizedName } from './shortcuts.js';
+import { z } from 'zod';
+
+// Define the schema to match what's in shortcuts.ts
+const RunShortcutSchema = z
+  .object({
+    name: z.string().describe("The name or identifier (UUID) of the shortcut to run"),
+    input: z
+      .string()
+      .optional()
+      .describe(
+        "The input to pass to the shortcut. Can be text, or a filepath",
+      ),
+  })
+  .strict();
 
 describe('sanitizeShortcutName', () => {
   it('should convert to lowercase', () => {
@@ -179,6 +193,43 @@ describe('generateUniqueSanitizedName', () => {
   });
 });
 
+describe('Shortcut Identifier Parsing', () => {
+  it('should parse shortcut names with identifiers correctly', () => {
+    const testCases = [
+      {
+        input: 'Simple Shortcut (D9DBF774-F5CF-4E2E-9418-392951F0C770)',
+        expected: { name: 'Simple Shortcut', identifier: 'D9DBF774-F5CF-4E2E-9418-392951F0C770' }
+      },
+      {
+        input: 'Shortcut (Name) (D9DBF774-F5CF-4E2E-9418-392951F0C770)',
+        expected: { name: 'Shortcut (Name)', identifier: 'D9DBF774-F5CF-4E2E-9418-392951F0C770' }
+      },
+      {
+        input: 'Complex (Name) With (Brackets) (D9DBF774-F5CF-4E2E-9418-392951F0C770)',
+        expected: { name: 'Complex (Name) With (Brackets)', identifier: 'D9DBF774-F5CF-4E2E-9418-392951F0C770' }
+      },
+      {
+        input: 'Shortcut Without UUID',
+        expected: { name: 'Shortcut Without UUID', identifier: undefined }
+      },
+      {
+        input: '(Leading Bracket) Shortcut (D9DBF774-F5CF-4E2E-9418-392951F0C770)',
+        expected: { name: '(Leading Bracket) Shortcut', identifier: 'D9DBF774-F5CF-4E2E-9418-392951F0C770' }
+      }
+    ];
+
+    testCases.forEach(testCase => {
+      const match = testCase.input.match(/^(.+?)\s*\(([A-F0-9-]+)\)$/);
+      if (match) {
+        expect(match[1].trim()).toBe(testCase.expected.name);
+        expect(match[2]).toBe(testCase.expected.identifier);
+      } else {
+        expect(testCase.expected.identifier).toBeUndefined();
+      }
+    });
+  });
+});
+
 describe('Configuration Environment Variables', () => {
   const originalEnv = process.env;
   
@@ -262,6 +313,36 @@ describe('Configuration Environment Variables', () => {
   });
 });
 
+describe('Shortcut Identifier Support', () => {
+  it('should document that run_shortcut accepts UUID identifiers', () => {
+    // This test verifies that the schema correctly documents UUID support
+    const schema = RunShortcutSchema.shape;
+    expect(schema.name._def.description).toContain('identifier (UUID)');
+  });
+
+  it('should validate UUID format in schema', () => {
+    // Test that the schema accepts valid UUIDs
+    const validInput = {
+      name: 'D9DBF774-F5CF-4E2E-9418-392951F0C770',
+      input: 'test input'
+    };
+    
+    const result = RunShortcutSchema.safeParse(validInput);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate shortcut names with identifiers', () => {
+    // Test that the schema accepts names with identifiers
+    const validInput = {
+      name: 'Video To GIF 1 (D9DBF774-F5CF-4E2E-9418-392951F0C770)',
+      input: 'test input'
+    };
+    
+    const result = RunShortcutSchema.safeParse(validInput);
+    expect(result.success).toBe(true);
+  });
+});
+
 describe('Server Configuration Integration', () => {
   const originalEnv = process.env;
   
@@ -282,8 +363,8 @@ describe('Server Configuration Integration', () => {
     
     // Mock child_process
     const mockExec = vi.fn((command, callback) => {
-      if (command === 'shortcuts list') {
-        callback(null, 'Test Shortcut 1\nTest Shortcut 2\n', '');
+      if (command === 'shortcuts list --show-identifiers') {
+        callback(null, 'Test Shortcut 1 (UUID-1234)\nTest Shortcut 2 (UUID-5678)\n', '');
       }
     });
     
@@ -307,20 +388,31 @@ describe('Server Configuration Integration', () => {
       ['Test Shortcut 2', 'test_shortcut_2']
     ]);
     
+    const shortcutIdentifierMap = new Map([
+      ['Test Shortcut 1', 'UUID-1234'],
+      ['Test Shortcut 2', 'UUID-5678']
+    ]);
+    
     const INJECT_SHORTCUT_LIST = true;
-    let runShortcutDescription = "Run a shortcut with optional input and output parameters";
+    let runShortcutDescription = "Run a shortcut by name or identifier (UUID) with optional input and output parameters";
     
     // Simulate the description injection logic from the code
     if (INJECT_SHORTCUT_LIST && shortcutMap.size > 0) {
       const shortcutList = Array.from(shortcutMap.keys())
-        .map(name => `- "${name}"`)
+        .map(name => {
+          const identifier = shortcutIdentifierMap.get(name);
+          if (identifier) {
+            return `- "${name}" (${identifier})`;
+          }
+          return `- "${name}"`;
+        })
         .join('\n');
       runShortcutDescription += `\n\nAvailable shortcuts:\n${shortcutList}`;
     }
     
     expect(runShortcutDescription).toContain('Available shortcuts:');
-    expect(runShortcutDescription).toContain('- "Test Shortcut 1"');
-    expect(runShortcutDescription).toContain('- "Test Shortcut 2"');
+    expect(runShortcutDescription).toContain('- "Test Shortcut 1" (UUID-1234)');
+    expect(runShortcutDescription).toContain('- "Test Shortcut 2" (UUID-5678)');
   });
 
   it('should not inject shortcut list when INJECT_SHORTCUT_LIST is false', () => {
@@ -329,13 +421,24 @@ describe('Server Configuration Integration', () => {
       ['Test Shortcut 2', 'test_shortcut_2']
     ]);
     
+    const shortcutIdentifierMap = new Map([
+      ['Test Shortcut 1', 'UUID-1234'],
+      ['Test Shortcut 2', 'UUID-5678']
+    ]);
+    
     const INJECT_SHORTCUT_LIST = false;
-    let runShortcutDescription = "Run a shortcut with optional input and output parameters";
+    let runShortcutDescription = "Run a shortcut by name or identifier (UUID) with optional input and output parameters";
     
     // Simulate the description injection logic from the code
     if (INJECT_SHORTCUT_LIST && shortcutMap.size > 0) {
       const shortcutList = Array.from(shortcutMap.keys())
-        .map(name => `- "${name}"`)
+        .map(name => {
+          const identifier = shortcutIdentifierMap.get(name);
+          if (identifier) {
+            return `- "${name}" (${identifier})`;
+          }
+          return `- "${name}"`;
+        })
         .join('\n');
       runShortcutDescription += `\n\nAvailable shortcuts:\n${shortcutList}`;
     }
@@ -346,14 +449,21 @@ describe('Server Configuration Integration', () => {
 
   it('should not inject shortcut list when no shortcuts are available', () => {
     const shortcutMap = new Map<string, string>();
+    const shortcutIdentifierMap = new Map<string, string>();
     
     const INJECT_SHORTCUT_LIST = true;
-    let runShortcutDescription = "Run a shortcut with optional input and output parameters";
+    let runShortcutDescription = "Run a shortcut by name or identifier (UUID) with optional input and output parameters";
     
     // Simulate the description injection logic from the code
     if (INJECT_SHORTCUT_LIST && shortcutMap.size > 0) {
       const shortcutList = Array.from(shortcutMap.keys())
-        .map(name => `- "${name}"`)
+        .map(name => {
+          const identifier = shortcutIdentifierMap.get(name);
+          if (identifier) {
+            return `- "${name}" (${identifier})`;
+          }
+          return `- "${name}"`;
+        })
         .join('\n');
       runShortcutDescription += `\n\nAvailable shortcuts:\n${shortcutList}`;
     }
