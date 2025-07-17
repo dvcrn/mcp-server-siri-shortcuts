@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/dvcrn-mcp-server-siri-shortcuts-badge.png)](https://mseep.ai/app/dvcrn-mcp-server-siri-shortcuts)
+
 # Siri Shortcuts MCP Server
 
 This MCP server provides access to Siri shortcuts functionality via the Model Context Protocol (MCP). It allows listing, opening, and running shortcuts from the macOS Shortcuts app.
