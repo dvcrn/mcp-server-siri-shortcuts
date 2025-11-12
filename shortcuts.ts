@@ -10,7 +10,7 @@ import {
   ToolSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { exec, spawn } from "child_process";
+import { spawn } from "child_process";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import path from "path";
 import fs from "fs";
@@ -86,26 +86,38 @@ type ToolResult = { [key: string]: any };
 // Function to execute the list_shortcuts tool
 const listShortcuts = async (): Promise<ToolResult> => {
   return new Promise((resolve, reject) => {
-    exec("shortcuts list --show-identifiers", (error, stdout, stderr) => {
-      if (error) {
+    const child = spawn("shortcuts", ["list", "--show-identifiers"]);
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    child.on("error", (error) => {
+      reject(
+        new McpError(
+          ErrorCode.InternalError,
+          `Failed to list shortcuts: ${error.message}`,
+        ),
+      );
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
         reject(
           new McpError(
             ErrorCode.InternalError,
-            `Failed to list shortcuts: ${error.message}`,
+            `Failed to list shortcuts: process exited with code ${code}. ${stderr}`,
           ),
         );
         return;
       }
-      if (stderr) {
-        reject(
-          new McpError(
-            ErrorCode.InternalError,
-            `Error listing shortcuts: ${stderr}`,
-          ),
-        );
-        return;
-      }
-      
+
       // Parse output with identifiers format: "Name (UUID)"
       const shortcuts = stdout
         .split("\n")
@@ -115,7 +127,7 @@ const listShortcuts = async (): Promise<ToolResult> => {
           // Extract name and identifier if present
           const match = trimmed.match(/^(.+?)\s*\(([A-F0-9-]+)\)$/);
           if (match) {
-            return { 
+            return {
               name: match[1].trim(),
               identifier: match[2]
             };
@@ -129,7 +141,7 @@ const listShortcuts = async (): Promise<ToolResult> => {
         const uniqueSanitizedName = generateUniqueSanitizedName(shortcut.name, existingSanitizedNames);
         shortcutMap.set(shortcut.name, uniqueSanitizedName);
         existingSanitizedNames.add(uniqueSanitizedName);
-        
+
         // Store identifier if present
         if ('identifier' in shortcut && shortcut.identifier) {
           shortcutIdentifierMap.set(shortcut.name, shortcut.identifier);
@@ -143,22 +155,28 @@ const listShortcuts = async (): Promise<ToolResult> => {
 // Function to execute the open_shortcut tool
 const openShortcut = async (params: OpenShortcutInput): Promise<ToolResult> => {
   return new Promise((resolve, reject) => {
-    const command = `shortcuts view '${params.name}'`;
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
+    const child = spawn("shortcuts", ["view", params.name]);
+    let stderr = "";
+
+    child.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    child.on("error", (error) => {
+      reject(
+        new McpError(
+          ErrorCode.InternalError,
+          `Failed to open shortcut: ${error.message}`,
+        ),
+      );
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
         reject(
           new McpError(
             ErrorCode.InternalError,
-            `Failed to open shortcut: ${error.message}`,
-          ),
-        );
-        return;
-      }
-      if (stderr) {
-        reject(
-          new McpError(
-            ErrorCode.InternalError,
-            `Error opening shortcut: ${stderr}`,
+            `Failed to open shortcut: process exited with code ${code}. ${stderr}`,
           ),
         );
         return;
@@ -171,44 +189,64 @@ const openShortcut = async (params: OpenShortcutInput): Promise<ToolResult> => {
 // Function to execute the run_shortcut tool
 const runShortcut = async (params: RunShortcutInput): Promise<ToolResult> => {
   return new Promise((resolve, reject) => {
-    let command = `shortcuts run '${params.name}'`;
-
-    const args = ["run", `'${params.name}'`];
+    const args = ["run", params.name];
 
     const input = params.input || " ";
 
     if (input.includes("/")) {
       if (!fs.existsSync(input)) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Input file does not exist: ${input}`,
+        reject(
+          new McpError(
+            ErrorCode.InvalidParams,
+            `Input file does not exist: ${input}`,
+          ),
         );
+        return;
       }
       args.push("--input-path");
-      args.push(`'${input}'`);
+      args.push(input);
     } else {
       // Create temp file with content
       const tmpPath = path.join("/tmp", `shortcut-input-${Date.now()}`);
       fs.writeFileSync(tmpPath, input);
       args.push("--input-path");
-      args.push(`'${tmpPath}'`);
+      args.push(tmpPath);
     }
 
-    args.push("|");
-    args.push("cat");
-
     console.error("Running command: shortcuts", args.join(" "));
-    exec(`shortcuts ${args.join(" ")}`, (error, stdout, stderr) => {
-      console.error("Run");
+    const child = spawn("shortcuts", args);
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    child.on("error", (error) => {
       console.error("Error:", error);
+      reject(
+        new McpError(
+          ErrorCode.InternalError,
+          `Failed to run shortcut: ${error.message}`,
+        ),
+      );
+    });
+
+    child.on("close", (code) => {
+      console.error("Run");
+      console.error("Exit code:", code);
       console.error("Stdout:", stdout);
       console.error("Stderr:", stderr);
 
-      if (error) {
+      if (code !== 0) {
         reject(
           new McpError(
             ErrorCode.InternalError,
-            `Failed to run shortcut: ${error.message}`,
+            `Failed to run shortcut: process exited with code ${code}. ${stderr}`,
           ),
         );
         return;
