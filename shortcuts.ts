@@ -10,10 +10,11 @@ import {
   ToolSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { exec, spawn } from "child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import path from "path";
 import fs from "fs";
+import os from "os";
 
 // Configuration from environment variables
 const GENERATE_SHORTCUT_TOOLS = process.env.GENERATE_SHORTCUT_TOOLS !== "false";
@@ -83,145 +84,146 @@ export const generateUniqueSanitizedName = (originalName: string, existingSaniti
 
 type ToolResult = { [key: string]: any };
 
-// Function to execute the list_shortcuts tool
-const listShortcuts = async (): Promise<ToolResult> => {
-  return new Promise((resolve, reject) => {
-    exec("shortcuts list --show-identifiers", (error, stdout, stderr) => {
-      if (error) {
-        reject(
-          new McpError(
-            ErrorCode.InternalError,
-            `Failed to list shortcuts: ${error.message}`,
-          ),
-        );
-        return;
-      }
-      if (stderr) {
-        reject(
-          new McpError(
-            ErrorCode.InternalError,
-            `Error listing shortcuts: ${stderr}`,
-          ),
-        );
-        return;
-      }
-      
-      // Parse output with identifiers format: "Name (UUID)"
-      const shortcuts = stdout
-        .split("\n")
-        .filter((line) => line.trim())
-        .map((line) => {
-          const trimmed = line.trim();
-          // Extract name and identifier if present
-          const match = trimmed.match(/^(.+?)\s*\(([A-F0-9-]+)\)$/);
-          if (match) {
-            return { 
-              name: match[1].trim(),
-              identifier: match[2]
-            };
-          }
-          return { name: trimmed };
-        });
+type ShortcutSpawn = (
+  command: string,
+  args: string[],
+  options: { shell: false },
+) => ChildProcessWithoutNullStreams;
 
-      // Update the shortcut map with unique sanitized names
-      const existingSanitizedNames = new Set<string>();
-      shortcuts.forEach((shortcut) => {
-        const uniqueSanitizedName = generateUniqueSanitizedName(shortcut.name, existingSanitizedNames);
-        shortcutMap.set(shortcut.name, uniqueSanitizedName);
-        existingSanitizedNames.add(uniqueSanitizedName);
-        
-        // Store identifier if present
-        if ('identifier' in shortcut && shortcut.identifier) {
-          shortcutIdentifierMap.set(shortcut.name, shortcut.identifier);
-        }
-      });
-      resolve({ shortcuts });
+const executeShortcutCommand = (
+  args: string[],
+  action: string,
+  spawnProcess: ShortcutSpawn = spawn as ShortcutSpawn,
+): Promise<{ stdout: string; stderr: string }> => {
+  return new Promise((resolve, reject) => {
+    const child = spawnProcess("shortcuts", args, { shell: false });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    child.once("error", (error) => {
+      reject(
+        new McpError(
+          ErrorCode.InternalError,
+          `Failed to ${action}: ${error.message}`,
+        ),
+      );
+    });
+
+    child.once("close", (code) => {
+      if (code !== 0) {
+        reject(
+          new McpError(
+            ErrorCode.InternalError,
+            `Failed to ${action}: process exited with code ${code}. ${stderr}`,
+          ),
+        );
+        return;
+      }
+
+      resolve({ stdout, stderr });
     });
   });
+};
+
+// Function to execute the list_shortcuts tool
+const listShortcuts = async (): Promise<ToolResult> => {
+  const { stdout } = await executeShortcutCommand(
+    ["list", "--show-identifiers"],
+    "list shortcuts",
+  );
+
+  // Parse output with identifiers format: "Name (UUID)"
+  const shortcuts = stdout
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      const trimmed = line.trim();
+      // Extract name and identifier if present
+      const match = trimmed.match(/^(.+?)\s*\(([A-F0-9-]+)\)$/);
+      if (match) {
+        return {
+          name: match[1].trim(),
+          identifier: match[2]
+        };
+      }
+      return { name: trimmed };
+    });
+
+  // Update the shortcut map with unique sanitized names
+  const existingSanitizedNames = new Set<string>();
+  shortcuts.forEach((shortcut) => {
+    const uniqueSanitizedName = generateUniqueSanitizedName(shortcut.name, existingSanitizedNames);
+    shortcutMap.set(shortcut.name, uniqueSanitizedName);
+    existingSanitizedNames.add(uniqueSanitizedName);
+
+    // Store identifier if present
+    if ('identifier' in shortcut && shortcut.identifier) {
+      shortcutIdentifierMap.set(shortcut.name, shortcut.identifier);
+    }
+  });
+  return { shortcuts };
 };
 
 // Function to execute the open_shortcut tool
 const openShortcut = async (params: OpenShortcutInput): Promise<ToolResult> => {
-  return new Promise((resolve, reject) => {
-    const command = `shortcuts view '${params.name}'`;
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        reject(
-          new McpError(
-            ErrorCode.InternalError,
-            `Failed to open shortcut: ${error.message}`,
-          ),
-        );
-        return;
-      }
-      if (stderr) {
-        reject(
-          new McpError(
-            ErrorCode.InternalError,
-            `Error opening shortcut: ${stderr}`,
-          ),
-        );
-        return;
-      }
-      resolve({ success: true, message: `Opened shortcut: ${params.name}` });
-    });
-  });
+  await executeShortcutCommand(["view", params.name], "open shortcut");
+  return { success: true, message: `Opened shortcut: ${params.name}` };
 };
 
 // Function to execute the run_shortcut tool
-const runShortcut = async (params: RunShortcutInput): Promise<ToolResult> => {
-  return new Promise((resolve, reject) => {
-    let command = `shortcuts run '${params.name}'`;
+export const runShortcut = async (
+  params: RunShortcutInput,
+  spawnProcess: ShortcutSpawn = spawn as ShortcutSpawn,
+): Promise<ToolResult> => {
+  const input = params.input ?? " ";
+  const isFilePath =
+    path.isAbsolute(input) || input.startsWith("./") || input.startsWith("../");
+  let temporaryDirectory: string | undefined;
 
-    const args = ["run", `'${params.name}'`];
+  try {
+    let inputPath = input;
 
-    const input = params.input || " ";
-
-    if (input.includes("/")) {
-      if (!fs.existsSync(input)) {
+    if (isFilePath) {
+      if (!fs.existsSync(inputPath)) {
         throw new McpError(
           ErrorCode.InvalidParams,
-          `Input file does not exist: ${input}`,
+          `Input file does not exist: ${inputPath}`,
         );
       }
-      args.push("--input-path");
-      args.push(`'${input}'`);
     } else {
-      // Create temp file with content
-      const tmpPath = path.join("/tmp", `shortcut-input-${Date.now()}`);
-      fs.writeFileSync(tmpPath, input);
-      args.push("--input-path");
-      args.push(`'${tmpPath}'`);
+      temporaryDirectory = fs.mkdtempSync(
+        path.join(os.tmpdir(), "mcp-siri-shortcuts-"),
+      );
+      inputPath = path.join(temporaryDirectory, "input");
+      fs.writeFileSync(inputPath, input, { flag: "wx", mode: 0o600 });
     }
 
-    args.push("|");
-    args.push("cat");
-
+    const args = ["run", params.name, "--input-path", inputPath];
     console.error("Running command: shortcuts", args.join(" "));
-    exec(`shortcuts ${args.join(" ")}`, (error, stdout, stderr) => {
-      console.error("Run");
-      console.error("Error:", error);
-      console.error("Stdout:", stdout);
-      console.error("Stderr:", stderr);
+    const { stdout } = await executeShortcutCommand(
+      args,
+      "run shortcut",
+      spawnProcess,
+    );
 
-      if (error) {
-        reject(
-          new McpError(
-            ErrorCode.InternalError,
-            `Failed to run shortcut: ${error.message}`,
-          ),
-        );
-        return;
-      }
+    if (stdout.trim()) {
+      return { success: true, output: stdout.trim() };
+    }
 
-      // If there's output, return it
-      if (stdout.trim()) {
-        resolve({ success: true, output: stdout.trim() });
-      } else {
-        resolve({ success: true, message: `Ran shortcut: ${params.name}` });
-      }
-    });
-  });
+    return { success: true, message: `Ran shortcut: ${params.name}` };
+  } finally {
+    if (temporaryDirectory) {
+      fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
 };
 
 // Function to sanitize shortcut names for use in command names

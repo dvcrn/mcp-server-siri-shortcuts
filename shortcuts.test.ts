@@ -1,5 +1,14 @@
+import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sanitizeShortcutName, generateUniqueSanitizedName } from './shortcuts.js';
+import {
+  sanitizeShortcutName,
+  generateUniqueSanitizedName,
+  runShortcut,
+} from './shortcuts.js';
 import { z } from 'zod';
 
 // Define the schema to match what's in shortcuts.ts
@@ -343,6 +352,116 @@ describe('Shortcut Identifier Support', () => {
   });
 });
 
+describe('runShortcut process security', () => {
+  const createSpawnMock = (exitCode: number, stdout = '') => {
+    let inputPath = '';
+    let inputContents = '';
+    let inputMode = 0;
+    const spawnMock = vi.fn((_command: string, args: string[]) => {
+      inputPath = args[3];
+      inputContents = fs.readFileSync(inputPath, 'utf8');
+      inputMode = fs.statSync(inputPath).mode & 0o777;
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: PassThrough;
+        stderr: PassThrough;
+      };
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+
+      queueMicrotask(() => {
+        child.stdout.end(stdout);
+        child.stderr.end(exitCode === 0 ? '' : 'shortcut failed');
+        child.emit('close', exitCode);
+      });
+
+      return child;
+    });
+
+    return {
+      spawnMock,
+      getInputPath: () => inputPath,
+      getInputContents: () => inputContents,
+      getInputMode: () => inputMode,
+    };
+  };
+
+  it('passes shortcut names as argv and removes private input files', async () => {
+    const shortcutName = "Safe'; touch /tmp/mcp-siri-pwned; echo '";
+    const {
+      spawnMock,
+      getInputPath,
+      getInputContents,
+      getInputMode,
+    } = createSpawnMock(0, 'shortcut output');
+
+    await expect(
+      runShortcut(
+        { name: shortcutName, input: 'private input' },
+        spawnMock as never,
+      ),
+    ).resolves.toEqual({ success: true, output: 'shortcut output' });
+
+    const inputPath = getInputPath();
+    expect(spawnMock).toHaveBeenCalledWith(
+      'shortcuts',
+      ['run', shortcutName, '--input-path', inputPath],
+      { shell: false },
+    );
+    expect(getInputContents()).toBe('private input');
+    expect(getInputMode()).toBe(0o600);
+    expect(fs.existsSync(inputPath)).toBe(false);
+  });
+
+  it('removes private input files when the shortcut fails', async () => {
+    const { spawnMock, getInputPath } = createSpawnMock(1);
+
+    await expect(
+      runShortcut(
+        { name: 'Failing Shortcut', input: 'private input' },
+        spawnMock as never,
+      ),
+    ).rejects.toThrow('process exited with code 1');
+
+    expect(fs.existsSync(getInputPath())).toBe(false);
+  });
+
+  it('passes existing input files through without removing them', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-siri-test-'));
+    const inputPath = path.join(directory, 'input.txt');
+    fs.writeFileSync(inputPath, 'file input');
+    const { spawnMock, getInputPath } = createSpawnMock(0);
+
+    try {
+      await runShortcut(
+        { name: 'File Shortcut', input: inputPath },
+        spawnMock as never,
+      );
+
+      expect(getInputPath()).toBe(inputPath);
+      expect(fs.existsSync(inputPath)).toBe(true);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects missing input file paths before spawning', async () => {
+    const missingPath = path.join(
+      os.tmpdir(),
+      `mcp-siri-missing-${process.pid}-${Date.now()}`,
+    );
+    const { spawnMock } = createSpawnMock(0);
+
+    await expect(
+      runShortcut(
+        { name: 'File Shortcut', input: missingPath },
+        spawnMock as never,
+      ),
+    ).rejects.toThrow(`Input file does not exist: ${missingPath}`);
+
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('Server Configuration Integration', () => {
   const originalEnv = process.env;
   
@@ -361,15 +480,7 @@ describe('Server Configuration Integration', () => {
     process.env.GENERATE_SHORTCUT_TOOLS = 'false';
     process.env.INJECT_SHORTCUT_LIST = 'true';
     
-    // Mock child_process
-    const mockExec = vi.fn((command, callback) => {
-      if (command === 'shortcuts list --show-identifiers') {
-        callback(null, 'Test Shortcut 1 (UUID-1234)\nTest Shortcut 2 (UUID-5678)\n', '');
-      }
-    });
-    
     vi.doMock('child_process', () => ({
-      exec: mockExec,
       spawn: vi.fn()
     }));
     
